@@ -64,10 +64,8 @@ def create_pipeline_app(
         if request.inferenceParams:
             threshold = request.inferenceParams.threshold
             if threshold is not None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="`threshold` is currently not supported.",
-                )
+                # Ignoring `threshold`
+                pass
 
         try:
             file_bytes = await serving_utils.get_raw_bytes(

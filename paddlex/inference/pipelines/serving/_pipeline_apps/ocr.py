@@ -67,10 +67,8 @@ def create_pipeline_app(pipeline: OCRPipeline, app_config: AppConfig) -> FastAPI
         if request.inferenceParams:
             max_long_side = request.inferenceParams.maxLongSide
             if max_long_side:
-                raise HTTPException(
-                    status_code=422,
-                    detail="`max_long_side` is currently not supported.",
-                )
+                # Ignoring `maxLongSide`
+                pass
 
         try:
             file_bytes = await serving_utils.get_raw_bytes(

@@ -171,10 +171,8 @@ def create_pipeline_app(pipeline: PPChatOCRPipeline, app_config: AppConfig) -> F
         if request.inferenceParams:
             max_long_side = request.inferenceParams.maxLongSide
             if max_long_side:
-                raise HTTPException(
-                    status_code=422,
-                    detail="`max_long_side` is currently not supported.",
-                )
+                # Ignoring `maxLongSide`
+                pass
 
         images, data_info = await ocr_common.get_images(request, ctx)
 

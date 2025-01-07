@@ -12,11 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 import uvicorn
 from fastapi import FastAPI
 
 
 def run_server(app: FastAPI, *, host: str, port: int, debug: bool) -> None:
+    # HACK
+    # https://github.com/encode/starlette/issues/864
+    class _EndpointFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return record.getMessage().find("/health") == -1
+
+    logging.getLogger("uvicorn.access").addFilter(_EndpointFilter())
+
     # XXX: Currently, `debug` is not used.
     # HACK: Fix duplicate logs
     uvicorn_version = tuple(int(x) for x in uvicorn.__version__.split("."))
