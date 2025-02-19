@@ -16,11 +16,9 @@ import abc
 import importlib.util
 import subprocess
 from typing import Union, Sequence, Tuple, List
-from pathlib import Path
-
-import paddle
+import lazy_paddle as paddle
 import numpy as np
-from paddle.inference import Config, create_predictor
+
 
 from ....utils import logging
 from ....utils.flags import DEBUG, USE_PIR_TRT
@@ -281,6 +279,8 @@ class PaddleInfer(StaticInfer):
         "paddle.base.libpaddle.PaddleInferTensor",
     ]:
         """_create"""
+        from lazy_paddle.inference import Config, create_predictor
+
         model_paths = get_model_paths(self.model_dir, self.model_file_prefix)
         if "paddle" not in model_paths:
             raise RuntimeError("No valid Paddle model found")
@@ -543,7 +543,7 @@ class HPInfer(StaticInfer):
             available_backends.append("onnxruntime")
         if is_built_with_trt() and is_onnx_model_available:
             available_backends.append("tensorrt")
-        if is_built_with_om() and "om" in model_paths:
+        if is_built_with_om():
             available_backends.append("om")
 
         if not available_backends:
