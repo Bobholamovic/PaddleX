@@ -244,7 +244,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         text_prompt = "Chart Recognition:"
                     elif "formula" in block_label and block_label != "formula_number":
                         text_prompt = "Formula Recognition:"
-                        block_img = crop_margin(block_img)
+                        crop_img = crop_margin(block_img)
+                        w, h, _ = crop_img.shape
+                        if w > 2 and h > 2:
+                            block_img = crop_img
                     block_imgs.append(block_img)
                     text_prompts.append(text_prompt)
                     figure_token_maps.append(figure_token_map)
