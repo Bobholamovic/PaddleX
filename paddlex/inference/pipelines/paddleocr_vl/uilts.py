@@ -50,6 +50,10 @@ def filter_overlap_boxes(
     dropped_indexes = set()
 
     for i in range(len(boxes)):
+        x1, y1, x2, y2 = boxes[i]["coordinate"]
+        w,h = x2 - x1, y2 - y1
+        if w<2 or h<2:
+            dropped_indexes.add(i)
         for j in range(i + 1, len(boxes)):
             if i in dropped_indexes or j in dropped_indexes:
                 continue
