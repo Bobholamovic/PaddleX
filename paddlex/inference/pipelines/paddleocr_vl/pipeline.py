@@ -206,6 +206,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         imgs_in_doc,
         use_chart_recognition=False,
         vlm_kwargs=None,
+        **kwargs,
     ):
         blocks = []
         block_imgs = []
@@ -259,23 +260,65 @@ class _PaddleOCRVLPipeline(BasePipeline):
         elif vlm_kwargs.get("max_new_tokens", None) is None:
             vlm_kwargs["max_new_tokens"] = 4096
 
+        table_min_pixels = kwargs.get("table_min_pixels", 56448)
+        table_max_pixels = kwargs.get("table_max_pixels", 1003520)
+        formula_min_pixels = kwargs.get("formula_min_pixels", 56448)
+        formula_max_pixels = kwargs.get("formula_max_pixels", 1003520)
+        chart_min_pixels = kwargs.get("chart_min_pixels", 56448)
+        chart_max_pixels = kwargs.get("chart_max_pixels", 1003520)
+        ocr_min_pixels = kwargs.get("ocr_min_pixels", 56448)
+        ocr_max_pixels = kwargs.get("ocr_max_pixels", 1003520)
+
         kwargs = {
             "use_cache": True,
             **vlm_kwargs,
         }
-        vl_rec_results = list(
-            self.vl_rec_model.predict(
-                [
-                    {
-                        "image": block_img,
-                        "query": text_prompt,
-                    }
-                    for block_img, text_prompt in zip(block_imgs, text_prompts)
-                ],
-                skip_special_tokens=True,
-                **kwargs,
+
+        if (
+            table_min_pixels == formula_min_pixels == chart_min_pixels == ocr_min_pixels
+        ) and (
+            table_max_pixels == formula_max_pixels == chart_max_pixels == ocr_max_pixels
+        ):
+            vl_rec_results = list(
+                self.vl_rec_model.predict(
+                    [
+                        {
+                            "image": block_img,
+                            "query": text_prompt,
+                        }
+                        for block_img, text_prompt in zip(block_imgs, text_prompts)
+                    ],
+                    skip_special_tokens=True,
+                    **kwargs,
+                )
             )
-        )
+        else:
+            vl_rec_results = []
+            for block_img, text_prompt in zip(block_imgs, text_prompts):
+                if text_prompt == "Table Recognition:":
+                    kwargs["min_pixels"] = table_min_pixels
+                    kwargs["max_pixels"] = table_max_pixels
+                elif text_prompt == "Formula Recognition:":
+                    kwargs["min_pixels"] = formula_min_pixels
+                    kwargs["max_pixels"] = formula_max_pixels
+                elif text_prompt == "Chart Recognition:":
+                    kwargs["min_pixels"] = chart_min_pixels
+                    kwargs["max_pixels"] = chart_max_pixels
+                elif text_prompt == "OCR:":
+                    kwargs["min_pixels"] = ocr_min_pixels
+                    kwargs["max_pixels"] = ocr_max_pixels
+                vl_rec_results.extend(
+                    self.vl_rec_model.predict(
+                        [
+                            {
+                                "image": block_img,
+                                "query": text_prompt,
+                            }
+                        ],
+                        skip_special_tokens=True,
+                        **kwargs,
+                    )
+                )
 
         parsing_res_lists = []
         table_res_lists = []
@@ -520,6 +563,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         "max_pixels": max_pixels,
                         "max_new_tokens": max_new_tokens,
                     },
+                    **kwargs,
                 )
             )
 
