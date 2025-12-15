@@ -260,13 +260,13 @@ class _PaddleOCRVLPipeline(BasePipeline):
         elif vlm_kwargs.get("max_new_tokens", None) is None:
             vlm_kwargs["max_new_tokens"] = 4096
 
-        table_min_pixels = kwargs.get("table_min_pixels", 56448)
-        table_max_pixels = kwargs.get("table_max_pixels", 1003520)
-        formula_min_pixels = kwargs.get("formula_min_pixels", 56448)
+        table_min_pixels = kwargs.get("table_min_pixels", 112896)
+        table_max_pixels = kwargs.get("table_max_pixels", 1605632)
+        formula_min_pixels = kwargs.get("formula_min_pixels", 112896)
         formula_max_pixels = kwargs.get("formula_max_pixels", 1003520)
-        chart_min_pixels = kwargs.get("chart_min_pixels", 56448)
+        chart_min_pixels = kwargs.get("chart_min_pixels", 112896)
         chart_max_pixels = kwargs.get("chart_max_pixels", 1003520)
-        ocr_min_pixels = kwargs.get("ocr_min_pixels", 56448)
+        ocr_min_pixels = kwargs.get("ocr_min_pixels", 112896)
         ocr_max_pixels = kwargs.get("ocr_max_pixels", 1003520)
 
         kwargs = {
