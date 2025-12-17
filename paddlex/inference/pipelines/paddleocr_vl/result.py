@@ -270,6 +270,11 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
 
         res_img_dict["layout_order_res"] = image
 
+        if model_settings["save_vl_images"]:
+            for index, vl_rec in enumerate(self["vl_rec_res_list"]):
+                image = vl_rec["image"]
+                res_img_dict[f"vl_res/vl_rec_res_{index}"] = image
+
         return res_img_dict
 
     def _to_html(self) -> dict[str, str]:

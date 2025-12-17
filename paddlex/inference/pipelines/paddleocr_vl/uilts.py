@@ -51,8 +51,8 @@ def filter_overlap_boxes(
 
     for i in range(len(boxes)):
         x1, y1, x2, y2 = boxes[i]["coordinate"]
-        w,h = x2 - x1, y2 - y1
-        if w<2 or h<2:
+        w, h = x2 - x1, y2 - y1
+        if w < 2 or h < 2:
             dropped_indexes.add(i)
         for j in range(i + 1, len(boxes)):
             if i in dropped_indexes or j in dropped_indexes:
@@ -124,7 +124,7 @@ def calc_merged_wh(images):
     return w, h
 
 
-def merge_images(images, aligns="center"):
+def merge_images(images, aligns="center", use_layout_mask=False):
     """
     Merge images vertically with given alignment.
 
@@ -164,7 +164,7 @@ def merge_images(images, aligns="center"):
     return to_np_array(merged)
 
 
-def merge_blocks(blocks, non_merge_labels):
+def merge_blocks(blocks, non_merge_labels, use_layout_mask=False):
     """
     Merge blocks based on alignment and overlap logic, except for those with labels in non_merge_labels.
 
@@ -297,7 +297,7 @@ def merge_blocks(blocks, non_merge_labels):
                         result_blocks.append(block)
                         used_indices.add(block_idx)
                 else:
-                    merged_img = merge_images(imgs, merge_aligns)
+                    merged_img = merge_images(imgs, merge_aligns, use_layout_mask)
                     for j, block_idx in enumerate(group_indices):
                         block = blocks[block_idx].copy()
                         block["img"] = merged_img if j == 0 else None

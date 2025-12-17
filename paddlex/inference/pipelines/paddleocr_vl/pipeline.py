@@ -134,6 +134,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         self.crop_by_boxes = CropByBoxes()
 
         self.use_queues = config.get("use_queues", False)
+        self.use_layout_mask = config.get("use_layout_mask", False)
+        self.save_vl_images = config.get("save_vl_images", False)
 
     def close(self):
         self.vl_rec_model.close()
@@ -143,8 +145,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_doc_orientation_classify: Union[bool, None],
         use_doc_unwarping: Union[bool, None],
         use_layout_detection: Union[bool, None],
+        use_layout_mask: Union[bool, None],
         use_chart_recognition: Union[bool, None],
         format_block_content: Union[bool, None],
+        save_vl_images: Union[bool, None],
     ) -> dict:
         """
         Get the model settings based on the provided parameters or default values.
@@ -174,11 +178,19 @@ class _PaddleOCRVLPipeline(BasePipeline):
         if format_block_content is None:
             format_block_content = self.format_block_content
 
+        if use_layout_mask is None:
+            use_layout_mask = self.use_layout_mask
+
+        if save_vl_images is None:
+            save_vl_images = self.save_vl_images
+
         return dict(
             use_doc_preprocessor=use_doc_preprocessor,
             use_layout_detection=use_layout_detection,
             use_chart_recognition=use_chart_recognition,
             format_block_content=format_block_content,
+            use_layout_mask=use_layout_mask,
+            save_vl_images=save_vl_images,
         )
 
     def check_model_settings_valid(self, input_params: dict) -> bool:
@@ -207,6 +219,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         imgs_in_doc,
         use_chart_recognition=False,
         vlm_kwargs=None,
+        use_layout_mask=None,
         **kwargs,
     ):
         blocks = []
@@ -223,9 +236,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
         ):
             layout_det_res = filter_overlap_boxes(layout_det_res)
             boxes = layout_det_res["boxes"]
-            blocks_for_img = self.crop_by_boxes(image, boxes)
+            blocks_for_img = self.crop_by_boxes(image, boxes, use_layout_mask)
             blocks_for_img = merge_blocks(
-                blocks_for_img, non_merge_labels=image_labels + ["table"]
+                blocks_for_img,
+                non_merge_labels=image_labels + ["table"],
+                use_layout_mask=use_layout_mask,
             )
             blocks.append(blocks_for_img)
             for j, block in enumerate(blocks_for_img):
@@ -322,10 +337,12 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 )
 
         parsing_res_lists = []
+        vl_rec_res_lists = []
         table_res_lists = []
         curr_vlm_block_idx = 0
         for i, blocks_for_img in enumerate(blocks):
             parsing_res_list = []
+            vl_rec_res_list = []
             table_res_list = []
             for j, block in enumerate(blocks_for_img):
                 block_img = block["img"]
@@ -340,6 +357,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     block_img4vl = block_imgs[curr_vlm_block_idx]
                     curr_vlm_block_idx += 1
                     vl_rec_result["image"] = block_img4vl
+                    vl_rec_res_list.append(vl_rec_result)
                     result_str = vl_rec_result.get("result", "")
                     if result_str is None:
                         result_str = ""
@@ -388,9 +406,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
                 parsing_res_list.append(block_info)
             parsing_res_lists.append(parsing_res_list)
+            vl_rec_res_lists.append(vl_rec_res_list)
             table_res_lists.append(table_res_list)
 
-        return parsing_res_lists, table_res_lists, imgs_in_doc
+        return parsing_res_lists, vl_rec_res_lists, table_res_lists, imgs_in_doc
 
     def predict(
         self,
@@ -398,6 +417,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_doc_orientation_classify: Union[bool, None] = False,
         use_doc_unwarping: Union[bool, None] = False,
         use_layout_detection: Union[bool, None] = None,
+        use_layout_mask: Union[bool, None] = None,
         use_chart_recognition: Union[bool, None] = None,
         layout_threshold: Optional[Union[float, dict]] = None,
         layout_nms: Optional[bool] = None,
@@ -412,6 +432,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         min_pixels: Optional[int] = None,
         max_pixels: Optional[int] = None,
         max_new_tokens: Optional[int] = None,
+        save_vl_images: Optional[bool] = None,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -448,8 +469,10 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_doc_orientation_classify,
             use_doc_unwarping,
             use_layout_detection,
+            use_layout_mask,
             use_chart_recognition,
             format_block_content,
+            save_vl_images,
         )
 
         if not self.check_model_settings_valid(model_settings):
@@ -550,13 +573,13 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 imgs_in_doc,
             ) = results_cv
 
-            parsing_res_lists, table_res_lists, imgs_in_doc = (
+            parsing_res_lists, vl_rec_res_lists, table_res_lists, imgs_in_doc = (
                 self.get_layout_parsing_results(
-                    doc_preprocessor_images,
-                    layout_det_results,
-                    imgs_in_doc,
-                    model_settings["use_chart_recognition"],
-                    {
+                    images=doc_preprocessor_images,
+                    layout_det_results=layout_det_results,
+                    imgs_in_doc=imgs_in_doc,
+                    use_chart_recognition=model_settings["use_chart_recognition"],
+                    vlm_kwargs={
                         "repetition_penalty": repetition_penalty,
                         "temperature": temperature,
                         "top_p": top_p,
@@ -564,6 +587,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         "max_pixels": max_pixels,
                         "max_new_tokens": max_new_tokens,
                     },
+                    use_layout_mask=model_settings["use_layout_mask"],
                     **kwargs,
                 )
             )
@@ -571,19 +595,19 @@ class _PaddleOCRVLPipeline(BasePipeline):
             for (
                 input_path,
                 page_index,
-                doc_preprocessor_image,
                 doc_preprocessor_res,
                 layout_det_res,
                 table_res_list,
+                vl_rec_res_list,
                 parsing_res_list,
                 imgs_in_doc_for_img,
             ) in zip(
                 input_paths,
                 page_indexes,
-                doc_preprocessor_images,
                 doc_preprocessor_results,
                 layout_det_results,
                 table_res_lists,
+                vl_rec_res_lists,
                 parsing_res_lists,
                 imgs_in_doc,
             ):
@@ -593,6 +617,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     "doc_preprocessor_res": doc_preprocessor_res,
                     "layout_det_res": layout_det_res,
                     "table_res_list": table_res_list,
+                    "vl_rec_res_list": vl_rec_res_list,
                     "parsing_res_list": parsing_res_list,
                     "imgs_in_doc": imgs_in_doc_for_img,
                     "model_settings": model_settings,
