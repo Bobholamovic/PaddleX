@@ -20,9 +20,6 @@ from typing import Any, Dict, Optional, Union
 from ...utils import errors
 from ..utils.hpi import HPIConfig
 from ..utils.official_models import official_models
-
-# from .table_recognition import TablePredictor
-# from .general_recognition import ShiTuRecPredictor
 from .anomaly_detection import UadPredictor
 from .base import BasePredictor
 from .common.genai import GenAIConfig, need_local_model
@@ -35,9 +32,8 @@ from .image_multilabel_classification import MLClasPredictor
 from .image_unwarping import WarpPredictor
 from .instance_segmentation import InstanceSegPredictor
 from .keypoint_detection import KptPredictor
+from .layout_analysis import LayoutAnalysisPredictor
 from .m_3d_bev_detection import BEVDet3DPredictor
-
-# from .face_recognition import FaceRecPredictor
 from .multilingual_speech_recognition import WhisperPredictor
 from .object_detection import DetPredictor
 from .open_vocabulary_detection import OVDetPredictor
@@ -46,14 +42,15 @@ from .semantic_segmentation import SegPredictor
 from .table_structure_recognition import TablePredictor
 from .text_detection import TextDetPredictor
 from .text_recognition import TextRecPredictor
+from .text_to_pinyin import TextToPinyinPredictor
+from .text_to_speech_acoustic import Fastspeech2Predictor
+from .text_to_speech_vocoder import PwganPredictor
 from .ts_anomaly_detection import TSAdPredictor
 from .ts_classification import TSClsPredictor
 from .ts_forecasting import TSFcPredictor
 from .video_classification import VideoClasPredictor
 from .video_detection import VideoDetPredictor
-from .text_to_speech_acoustic import Fastspeech2Predictor
-from .text_to_speech_vocoder import PwganPredictor
-from .text_to_pinyin import TextToPinyinPredictor
+
 
 def create_predictor(
     model_name: str,
