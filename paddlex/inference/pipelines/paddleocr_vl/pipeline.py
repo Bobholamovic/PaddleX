@@ -433,6 +433,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         max_pixels: Optional[int] = None,
         max_new_tokens: Optional[int] = None,
         save_vl_images: Optional[bool] = None,
+        layout_gt_dir: Union[str, None] = None,
         **kwargs,
     ) -> PaddleOCRVLResult:
         """
@@ -519,18 +520,77 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 doc_preprocessor_images = [
                     item["output_img"] for item in doc_preprocessor_results
                 ]
+                if layout_gt_dir:
+                    import json
+                    import os
 
-                if model_settings["use_layout_detection"]:
-                    layout_det_results = list(
-                        self.layout_det_model(
-                            doc_preprocessor_images,
-                            threshold=layout_threshold,
-                            layout_nms=layout_nms,
-                            layout_unclip_ratio=layout_unclip_ratio,
-                            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
-                        )
-                    )
+                    from ...models.object_detection.result import DetResult
 
+                    layout_det_results = []
+                    model_settings["use_layout_mask"] = False
+                    model_settings["use_layout_gt"] = True
+
+                    for idx, image in enumerate(doc_preprocessor_images):
+                        input = batch_data.instances[idx]
+                        doc_preprocessor_image = image
+                        label_dir = layout_gt_dir
+                        notes_path = f"{label_dir}/notes.json"
+                        labels = f"{label_dir}/labels"
+                        gt_file = os.path.basename(input).rsplit(".", 1)[0] + ".txt"
+                        gt_path = f"{labels}/{gt_file}"
+                        with open(notes_path, "r") as f:
+                            notes = json.load(f)
+                        categories_map = {}
+                        for categories in notes["categories"]:
+                            id = int(categories["id"])
+                            name = categories["name"]
+                            categories_map[id] = name
+                        with open(gt_path, "r") as f:
+                            lines = f.readlines()
+                        layout_det_res_dic = {
+                            "input_img": doc_preprocessor_image,
+                            "page_index": None,
+                            "boxes": [],
+                        }
+                        for line in lines:
+                            line = line.strip().split(" ")
+                            category_id = int(line[0])
+                            label = categories_map[category_id]
+                            img_h, img_w = doc_preprocessor_image.shape[:2]
+                            center_x = float(line[1]) * img_w
+                            center_y = float(line[2]) * img_h
+                            w = float(line[3]) * img_w
+                            h = float(line[4]) * img_h
+                            x0 = center_x - w / 2
+                            y0 = center_y - h / 2
+                            x1 = center_x + w / 2
+                            y1 = center_y + h / 2
+                            x0 = max(0, int(x0))
+                            y0 = max(0, int(y0))
+                            x1 = min(img_w, int(x1))
+                            y1 = min(img_h, int(y1))
+                            x_min = min(x0, x1)
+                            y_min = min(y0, y1)
+                            x_max = max(x0, x1)
+                            y_max = max(y0, y1)
+                            if (
+                                x_min >= img_w
+                                or y_min >= img_h
+                                or x_max <= 0
+                                or y_max <= 0
+                            ):
+                                continue
+                            box = [x_min, y_min, x_max, y_max]
+                            layout_det_res_dic["boxes"].append(
+                                {
+                                    "cls_id": category_id,
+                                    "label": label,
+                                    "coordinate": box,
+                                    "score": 1.0,
+                                }
+                            )
+                        layout_det_res = DetResult(layout_det_res_dic)
+                        layout_det_results.append(layout_det_res)
                     imgs_in_doc = [
                         gather_imgs(doc_pp_img, layout_det_res["boxes"])
                         for doc_pp_img, layout_det_res in zip(
@@ -538,28 +598,46 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
                     ]
                 else:
-                    layout_det_results = []
-                    for doc_preprocessor_image in doc_preprocessor_images:
-                        layout_det_results.append(
-                            {
-                                "input_path": None,
-                                "page_index": None,
-                                "boxes": [
-                                    {
-                                        "cls_id": 0,
-                                        "label": prompt_label.lower(),
-                                        "score": 1,
-                                        "coordinate": [
-                                            0,
-                                            0,
-                                            doc_preprocessor_image.shape[1],
-                                            doc_preprocessor_image.shape[0],
-                                        ],
-                                    }
-                                ],
-                            }
+                    if model_settings["use_layout_detection"]:
+                        layout_det_results = list(
+                            self.layout_det_model(
+                                doc_preprocessor_images,
+                                threshold=layout_threshold,
+                                layout_nms=layout_nms,
+                                layout_unclip_ratio=layout_unclip_ratio,
+                                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+                            )
                         )
-                    imgs_in_doc = [[] for _ in layout_det_results]
+
+                        imgs_in_doc = [
+                            gather_imgs(doc_pp_img, layout_det_res["boxes"])
+                            for doc_pp_img, layout_det_res in zip(
+                                doc_preprocessor_images, layout_det_results
+                            )
+                        ]
+                    else:
+                        layout_det_results = []
+                        for doc_preprocessor_image in doc_preprocessor_images:
+                            layout_det_results.append(
+                                {
+                                    "input_path": None,
+                                    "page_index": None,
+                                    "boxes": [
+                                        {
+                                            "cls_id": 0,
+                                            "label": prompt_label.lower(),
+                                            "score": 1,
+                                            "coordinate": [
+                                                0,
+                                                0,
+                                                doc_preprocessor_image.shape[1],
+                                                doc_preprocessor_image.shape[0],
+                                            ],
+                                        }
+                                    ],
+                                }
+                            )
+                        imgs_in_doc = [[] for _ in layout_det_results]
 
                 yield input_paths, page_indexes, doc_preprocessor_images, doc_preprocessor_results, layout_det_results, imgs_in_doc
 
