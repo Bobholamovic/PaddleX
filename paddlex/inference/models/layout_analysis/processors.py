@@ -29,7 +29,7 @@ Number = Union[int, float]
 
 
 @function_requires_deps("opencv-contrib-python")
-def postprocess_mask(mask, epsilon_ratio=0.004):
+def mask2polygon(mask, epsilon_ratio=0.004):
     """
     Postprocess mask by removing small noise.
     Args:
@@ -41,39 +41,39 @@ def postprocess_mask(mask, epsilon_ratio=0.004):
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not cnts:
-        return mask
+        return None
 
     cnt = max(cnts, key=cv2.contourArea)
     epsilon = epsilon_ratio * cv2.arcLength(cnt, True)
     approx_cnt = cv2.approxPolyDP(cnt, epsilon, True)
-    mask_result = np.zeros_like(mask)
-    cv2.drawContours(mask_result, [approx_cnt], -1, 1, thickness=cv2.FILLED)
+    polygon_points = approx_cnt.squeeze()
+    polygon_points = np.atleast_2d(polygon_points)
 
-    return mask_result
+    return polygon_points
 
 
 @function_requires_deps("opencv-contrib-python")
-def extract_masks_from_boxes(boxes, masks, scale_ratio):
+def extract_polygon_points_by_masks(boxes, masks, scale_ratio):
     """
-    Extract binary mask from boxes.
+    Extract polygon points from masks.
     Args:
         boxes (ndarray): The bounding boxes of shape [N, 5].
         masks (ndarray): The segmentation masks of shape [N, H, W].
         scale_ratio (tuple): The scale ratio of width and height.
     Returns:
-        new_masks (list): The extracted binary masks.
+        polygon_points (list): The extracted polygon points.
     """
     scale_w, scale_h = scale_ratio
     scale_w /= 4
     scale_h /= 4
     N = len(boxes)
     h, w = masks.shape[1:]
-    new_masks = []
+    polygon_points = []
 
     for i in range(N):
-        x_min, y_min, x_max, y_max = boxes[i, 2:6]
-        img_w = int(x_max - x_min)
-        img_h = int(y_max - y_min)
+        x_min, y_min, x_max, y_max = np.int32(boxes[i, 2:6])
+        box_w = int(x_max - x_min)
+        box_h = int(y_max - y_min)
 
         x_min_s = int(round(x_min * scale_w))
         y_min_s = int(round(y_min * scale_h))
@@ -85,31 +85,33 @@ def extract_masks_from_boxes(boxes, masks, scale_ratio):
         y_min_s = max(0, min(y_min_s, h - 1))
         y_max_s = max(0, min(y_max_s, h))
 
-        if x_max_s <= x_min_s or y_max_s <= y_min_s or img_w <= 0 or img_h <= 0:
-            new_masks.append(np.zeros((1, 1), dtype=np.uint8))
+        if x_max_s <= x_min_s or y_max_s <= y_min_s or box_w <= 0 or box_h <= 0:
+            polygon_points.append(None)
             continue
 
         cropped_mask = masks[i, y_min_s:y_max_s, x_min_s:x_max_s]
         if cropped_mask.size == 0:
-            new_masks.append(np.zeros((1, 1), dtype=np.uint8))
+            polygon_points.append(None)
             continue
 
         resized_mask = cv2.resize(
             cropped_mask.astype(np.uint8),
-            (img_w, img_h),
+            (box_w, box_h),
             interpolation=cv2.INTER_LINEAR,
         )
-        post_mask = postprocess_mask(resized_mask)
-        new_masks.append(post_mask)
+        polygon = mask2polygon(resized_mask)
+        if polygon is not None and len(polygon) > 0:
+            polygon = polygon + np.array([x_min, y_min])
+        polygon_points.append(polygon)
 
-    return new_masks
+    return polygon_points
 
 
 def restructured_boxes(
     boxes: ndarray,
     labels: List[str],
     img_size: Tuple[int, int],
-    masks: ndarray = None,
+    polygon_points: ndarray = None,
 ) -> Boxes:
     """
     Restructure the given bounding boxes and labels based on the image size.
@@ -118,7 +120,7 @@ def restructured_boxes(
         boxes (ndarray): A 2D array of bounding boxes with each box represented as [cls_id, score, xmin, ymin, xmax, ymax].
         labels (List[str]): A list of class labels corresponding to the class ids.
         img_size (Tuple[int, int]): A tuple representing the width and height of the image.
-
+        polygon_points (ndarray): A 2D array of polygon points with each point represented as [x, y].
     Returns:
         Boxes: A list of dictionaries, each containing 'cls_id', 'label', 'score', and 'coordinate' keys.
     """
@@ -127,10 +129,10 @@ def restructured_boxes(
 
     for idx, box in enumerate(boxes):
         xmin, ymin, xmax, ymax = box[2:]
-        xmin = max(0, xmin)
-        ymin = max(0, ymin)
-        xmax = min(w, xmax)
-        ymax = min(h, ymax)
+        xmin = int(max(0, xmin))
+        ymin = int(max(0, ymin))
+        xmax = int(min(w, xmax))
+        ymax = int(min(h, ymax))
         if xmax <= xmin or ymax <= ymin:
             continue
         res = {
@@ -139,9 +141,11 @@ def restructured_boxes(
             "score": float(box[1]),
             "coordinate": [xmin, ymin, xmax, ymax],
         }
-        if masks is not None:
-            mask = masks[idx]
-            res["mask"] = mask
+        if polygon_points is not None:
+            polygon_point = polygon_points[idx]
+            if polygon_point is None:
+                continue
+            res["polygon_points"] = polygon_point
         box_list.append(res)
 
     return box_list
@@ -237,6 +241,7 @@ class LayoutAnalysisProcess:
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]],
         layout_merge_bboxes_mode: Optional[Union[str, dict]],
         masks: Optional[ndarray] = None,
+        use_mask: Optional[bool] = None,
     ) -> Boxes:
         """Apply post-processing to the detection boxes.
 
@@ -247,6 +252,10 @@ class LayoutAnalysisProcess:
         Returns:
             Boxes: The post-processed detection boxes.
         """
+        polygon_points = None
+        if not use_mask:
+            masks = None
+        boxes[:, 2:6] = np.round(boxes[:, 2:6]).astype(int)
         if isinstance(threshold, float):
             expect_boxes = (boxes[:, 1] > threshold) & (boxes[:, 0] > -1)
             boxes = boxes[expect_boxes, :]
@@ -281,13 +290,13 @@ class LayoutAnalysisProcess:
                 )
         if masks is not None:
             scale_ratio = [h / s for h, s in zip(self.scale_size, img_size)]
-            masks = extract_masks_from_boxes(boxes, masks, scale_ratio)
+            polygon_points = extract_polygon_points_by_masks(boxes, masks, scale_ratio)
 
         if layout_nms:
             selected_indices = nms(boxes[:, :6], iou_same=0.6, iou_diff=0.98)
             boxes = np.array(boxes[selected_indices])
             if masks is not None:
-                masks = [masks[i] for i in selected_indices]
+                polygon_points = [polygon_points[i] for i in selected_indices]
 
         filter_large_image = True
         # boxes.shape[1] == 6 is object detection, 7 is new ordered object detection, 8 is ordered object detection
@@ -299,7 +308,7 @@ class LayoutAnalysisProcess:
             image_index = self.labels.index("image") if "image" in self.labels else None
             img_area = img_size[0] * img_size[1]
             filtered_boxes = []
-            filtered_masks = []
+            filtered_polygon_points = []
             for idx, box in enumerate(boxes):
                 (
                     label_index,
@@ -317,19 +326,19 @@ class LayoutAnalysisProcess:
                     box_area = (xmax - xmin) * (ymax - ymin)
                     if box_area <= area_thres * img_area:
                         filtered_boxes.append(box)
-                        if masks is not None:
-                            filtered_masks.append(masks[idx])
+                        if polygon_points is not None:
+                            filtered_polygon_points.append(polygon_points[idx])
                 else:
                     filtered_boxes.append(box)
-                    if masks is not None:
-                        filtered_masks.append(masks[idx])
+                    if polygon_points is not None:
+                        filtered_polygon_points.append(polygon_points[idx])
             if len(filtered_boxes) == 0:
                 filtered_boxes = boxes
                 if masks is not None:
-                    filtered_masks = masks
+                    filtered_polygon_points = polygon_points
             boxes = np.array(filtered_boxes)
             if masks is not None:
-                masks = filtered_masks
+                polygon_points = filtered_polygon_points
 
         if layout_merge_bboxes_mode:
             formula_index = (
@@ -351,17 +360,17 @@ class LayoutAnalysisProcess:
                     if layout_merge_bboxes_mode == "large":
                         boxes = boxes[contained_by_other == 0]
                         if masks is not None:
-                            masks = [
-                                mask
-                                for i, mask in enumerate(masks)
+                            polygon_points = [
+                                polygon_points
+                                for i, polygon_points in enumerate(polygon_points)
                                 if contained_by_other[i] == 0
                             ]
                     elif layout_merge_bboxes_mode == "small":
                         boxes = boxes[(contains_other == 0) | (contained_by_other == 1)]
                         if masks is not None:
-                            masks = [
-                                mask
-                                for i, mask in enumerate(masks)
+                            polygon_points = [
+                                polygon
+                                for i, polygon in enumerate(polygon_points)
                                 if (contains_other[i] == 0)
                                 | (contained_by_other[i] == 1)
                             ]
@@ -398,7 +407,11 @@ class LayoutAnalysisProcess:
                             )
                 boxes = boxes[keep_mask]
                 if masks is not None:
-                    masks = [mask for i, mask in enumerate(masks) if keep_mask[i]]
+                    polygon_points = [
+                        polygon
+                        for i, polygon in enumerate(polygon_points)
+                        if keep_mask[i]
+                    ]
 
         if boxes.size == 0:
             return np.array([])
@@ -409,8 +422,8 @@ class LayoutAnalysisProcess:
             sorted_boxes = boxes[sorted_idx]
             boxes = sorted_boxes[:, :6]
             if masks is not None:
-                sorted_masks = [masks[i] for i in sorted_idx]
-                masks = sorted_masks
+                sorted_polygon_points = [polygon_points[i] for i in sorted_idx]
+                polygon_points = sorted_polygon_points
 
         if boxes.shape[1] == 7:
             # Sort boxes by their order
@@ -418,8 +431,8 @@ class LayoutAnalysisProcess:
             sorted_boxes = boxes[sorted_idx]
             boxes = sorted_boxes[:, :6]
             if masks is not None:
-                sorted_masks = [masks[i] for i in sorted_idx]
-                masks = sorted_masks
+                sorted_polygon_points = [polygon_points[i] for i in sorted_idx]
+                polygon_points = sorted_polygon_points
 
         if layout_unclip_ratio:
             if isinstance(layout_unclip_ratio, float):
@@ -438,7 +451,7 @@ class LayoutAnalysisProcess:
 
         if boxes.shape[1] == 6:
             """For Normal Object Detection"""
-            boxes = restructured_boxes(boxes, self.labels, img_size, masks)
+            boxes = restructured_boxes(boxes, self.labels, img_size, polygon_points)
         else:
             """Unexpected Input Box Shape"""
             raise ValueError(
@@ -454,6 +467,7 @@ class LayoutAnalysisProcess:
         layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float]]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
+        use_mask: Optional[bool] = None,
     ) -> List[Boxes]:
         """Apply the post-processing to a batch of outputs.
 
@@ -478,6 +492,7 @@ class LayoutAnalysisProcess:
                 layout_unclip_ratio,
                 layout_merge_bboxes_mode,
                 masks,
+                use_mask,
             )
             outputs.append(boxes)
         return outputs

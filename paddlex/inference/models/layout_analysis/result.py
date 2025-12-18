@@ -19,9 +19,13 @@ import numpy as np
 import PIL
 from PIL import Image, ImageDraw, ImageFont
 
+from ....utils.deps import function_requires_deps, is_dep_available
 from ....utils.fonts import PINGFANG_FONT
 from ...common.result import BaseCVResult, JsonMixin
 from ...utils.color_map import font_colormap, get_colormap
+
+if is_dep_available("opencv-contrib-python"):
+    import cv2
 
 
 def draw_box(img: Image.Image, boxes: List[dict]) -> Image.Image:
@@ -98,22 +102,19 @@ def draw_box(img: Image.Image, boxes: List[dict]) -> Image.Image:
     return img
 
 
+@function_requires_deps("opencv-contrib-python")
 def restore_to_draw_masks(img_size, boxes):
     """
     Restores extracted masks to the original shape and draws them on a blank image.
 
     """
-
     restored_masks = []
 
     for i, box_info in enumerate(boxes):
         restored_mask = np.zeros(img_size, dtype=np.uint8)
-        x_min = int(np.floor(box_info["coordinate"][0]))
-        y_min = int(np.floor(box_info["coordinate"][1]))
-        h, w = box_info["mask"].shape
-        x_max = x_min + w
-        y_max = y_min + h
-        restored_mask[y_min:y_max, x_min:x_max] = box_info["mask"]
+        polygon = np.array(box_info["polygon_points"], dtype=np.int32)
+        polygon = polygon.reshape((-1, 1, 2))  # shape: (N, 1, 2)
+        cv2.fillPoly(restored_mask, [polygon], 1)
         restored_masks.append(restored_mask)
 
     return np.array(restored_masks)
@@ -157,7 +158,7 @@ class LayoutAnalysisResult(BaseCVResult):
         boxes = self["boxes"]
         image = Image.fromarray(self["input_img"][..., ::-1])
         ori_img_size = list(image.size)[::-1]
-        if len(boxes) > 0 and "mask" in boxes[0]:
+        if len(boxes) > 0 and "polygon_points" in boxes[0]:
             image = draw_mask(image, boxes, ori_img_size)
         return {"res": draw_box(image, boxes)}
 

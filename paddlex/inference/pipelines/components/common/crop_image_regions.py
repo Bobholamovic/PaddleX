@@ -57,19 +57,21 @@ class CropByBoxes(BaseOperator):
                 the original bounding box coordinates ('box'), and the label ('label').
         """
         output_list = []
-        for bbox_info in boxes:
-            label_id = bbox_info["cls_id"]
-            box = bbox_info["coordinate"]
-            label = bbox_info.get("label", label_id)
+        for box_info in boxes:
+            label_id = box_info["cls_id"]
+            box = box_info["coordinate"]
+            label = box_info.get("label", label_id)
             xmin, ymin, xmax, ymax = [int(i) for i in box]
-            if use_layout_mask and "mask" in bbox_info:
-                h, w = bbox_info["mask"].shape
-                xmax = xmin + w
-                ymax = ymin + h
             img_crop = img[ymin:ymax, xmin:xmax].copy()
             out_info = {"img": img_crop, "box": box, "label": label}
-            if use_layout_mask and "mask" in bbox_info:
-                mask = bbox_info["mask"].astype(bool)
+            if use_layout_mask and "polygon_points" in box_info:
+                mask = np.zeros(img_crop.shape[:2], dtype=np.int32)
+                polygon = np.array(box_info["polygon_points"], dtype=np.int32)
+                polygon = polygon.reshape((-1, 1, 2))
+                if polygon is not None and len(polygon) > 0:
+                    polygon = polygon - np.array([xmin, ymin])
+                cv2.fillPoly(mask, [polygon], 1)
+                mask = mask.astype(bool)
                 img_crop[~mask] = 255
                 out_info["img"] = img_crop
                 out_info["mask"] = mask

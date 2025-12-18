@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from ....modules.object_detection.model_list import LAYOUTANALYSIS_MODELS
 from ..object_detection import DetPredictor
@@ -30,6 +30,7 @@ class LayoutAnalysisPredictor(DetPredictor):
         self,
         *args,
         img_size: Optional[Union[int, Tuple[int, int]]] = None,
+        use_mask: bool = True,
         **kwargs,
     ):
         """Initializes LayoutAnalysisPredictor.
@@ -59,10 +60,66 @@ class LayoutAnalysisPredictor(DetPredictor):
                 raise ValueError(
                     f"The type of `img_size` must be int or Tuple[int, int], but got {type(img_size)}."
                 )
+        self.use_mask = use_mask
         super().__init__(*args, **kwargs)
 
     def _get_result_class(self):
         return LayoutAnalysisResult
+
+    def process(
+        self,
+        batch_data: List[Any],
+        threshold: Optional[Union[float, dict]] = None,
+        layout_nms: bool = False,
+        layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
+        layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
+        use_mask: Optional[bool] = None,
+    ):
+        """
+        Process a batch of data through the preprocessing, inference, and postprocessing.
+
+        Args:
+            batch_data (List[Union[str, np.ndarray], ...]): A batch of input data (e.g., image file paths).
+            threshold (Optional[float, dict], optional): The threshold for filtering out low-confidence predictions.
+            layout_nms (bool, optional): Whether to use layout-aware NMS. Defaults to None.
+            layout_unclip_ratio (Optional[Union[float, Tuple[float, float]]], optional): The ratio of unclipping the bounding box.
+            layout_merge_bboxes_mode (Optional[Union[str, dict]], optional): The mode for merging bounding boxes. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing the input path, raw image, class IDs, scores, and label names
+                for every instance of the batch. Keys include 'input_path', 'input_img', 'class_ids', 'scores', and 'label_names'.
+        """
+        datas = batch_data.instances
+        # preprocess
+        for pre_op in self.pre_ops[:-1]:
+            datas = pre_op(datas)
+
+        # use `ToBatch` format batch inputs
+        batch_inputs = self.pre_ops[-1](datas)
+
+        # do infer
+        batch_preds = self.infer(batch_inputs)
+
+        # process a batch of predictions into a list of single image result
+        preds_list = self._format_output(batch_preds)
+        # postprocess
+        boxes = self.post_op(
+            preds_list,
+            datas,
+            threshold=threshold if threshold is not None else self.threshold,
+            layout_nms=layout_nms or self.layout_nms,
+            layout_unclip_ratio=layout_unclip_ratio or self.layout_unclip_ratio,
+            layout_merge_bboxes_mode=layout_merge_bboxes_mode
+            or self.layout_merge_bboxes_mode,
+            use_mask=use_mask if use_mask is not None else self.use_mask,
+        )
+
+        return {
+            "input_path": batch_data.input_paths,
+            "page_index": batch_data.page_indexes,
+            "input_img": [data["ori_img"] for data in datas],
+            "boxes": boxes,
+        }
 
     @DetPredictor.register("Resize")
     def build_resize(self, target_size, keep_ratio=False, interp=2):
