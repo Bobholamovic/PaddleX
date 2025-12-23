@@ -31,6 +31,11 @@ from ..layout_parsing.utils import (
 )
 
 
+def make_valid(poly):
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    return poly
+
 def calculate_polygon_overlap_ratio(
     polygon1: List[Tuple[int, int]],
     polygon2: List[Tuple[int, int]],
@@ -53,6 +58,8 @@ def calculate_polygon_overlap_ratio(
         raise ImportError("Please install Shapely library.")
     poly1 = Polygon(polygon1)
     poly2 = Polygon(polygon2)
+    poly1 = make_valid(poly1)
+    poly2 = make_valid(poly2)
     intersection = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     if mode == "union":
