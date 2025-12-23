@@ -31,8 +31,38 @@ from ..layout_parsing.utils import (
 )
 
 
+def calculate_polygon_overlap_ratio(
+    polygon1: List[Tuple[int, int]],
+    polygon2: List[Tuple[int, int]],
+    mode: str = "union",
+) -> float:
+    """
+    Calculate the overlap ratio between two polygons.
+
+    Args:
+        polygon1 (List[Tuple[int, int]]): First polygon represented as a list of points.
+        polygon2 (List[Tuple[int, int]]): Second polygon represented as a list of points.
+        mode (str, optional): Overlap calculation mode. Defaults to "union".
+
+    Returns:
+        float: Overlap ratio value between 0 and 1.
+    """
+    try:
+        from shapely.geometry import Polygon
+    except ImportError:
+        raise ImportError("Please install Shapely library.")
+    poly1 = Polygon(polygon1)
+    poly2 = Polygon(polygon2)
+    intersection = poly1.intersection(poly2).area
+    union = poly1.union(poly2).area
+    if mode == "union":
+        return intersection / union
+    elif mode == "small":
+        return min(intersection / poly1.area, intersection / poly2.area)
+
+
 def filter_overlap_boxes(
-    layout_det_res: Dict[str, List[Dict]]
+    layout_det_res: Dict[str, List[Dict]], use_layout_mask: bool
 ) -> Dict[str, List[Dict]]:
     """
     Remove overlapping boxes from layout detection results based on a given overlap ratio.
@@ -61,6 +91,12 @@ def filter_overlap_boxes(
                 boxes[i]["coordinate"], boxes[j]["coordinate"], "small"
             )
             if overlap_ratio > 0.7:
+                if use_layout_mask:
+                    poly_overlap_ratio = calculate_polygon_overlap_ratio(
+                        boxes[i]["polygon_points"], boxes[j]["polygon_points"], "small"
+                    )
+                    if poly_overlap_ratio < 0.7:
+                        continue
                 box_area_i = calculate_bbox_area(boxes[i]["coordinate"])
                 box_area_j = calculate_bbox_area(boxes[j]["coordinate"])
                 if (

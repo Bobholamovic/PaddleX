@@ -234,7 +234,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         for i, (image, layout_det_res, imgs_in_doc_for_img) in enumerate(
             zip(images, layout_det_results, imgs_in_doc)
         ):
-            layout_det_res = filter_overlap_boxes(layout_det_res)
+            layout_det_res = filter_overlap_boxes(layout_det_res, use_layout_mask)
             boxes = layout_det_res["boxes"]
             blocks_for_img = self.crop_by_boxes(image, boxes, use_layout_mask)
             blocks_for_img = merge_blocks(
