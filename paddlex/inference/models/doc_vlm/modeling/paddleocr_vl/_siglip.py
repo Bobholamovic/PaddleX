@@ -35,6 +35,7 @@
 
 # TODO: Weight initialization
 
+import platform
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -42,6 +43,11 @@ import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 
+from ......utils.env import (
+    get_device_type,
+    get_gpu_compute_capability,
+    get_paddle_cuda_version,
+)
 from ....common.transformers.activations import ACT2FN
 from ....common.transformers.transformers import PretrainedModel
 from ....common.transformers.transformers.model_outputs import (
@@ -137,6 +143,20 @@ class SiglipAttention(nn.Layer):
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
+        cap = get_gpu_compute_capability()
+        cuda_ver = get_paddle_cuda_version()
+        self._supports_sdpa = False
+        if (
+            cap is not None
+            and cap >= (8, 0)
+            and cuda_ver is not None
+            and cuda_ver >= (11, 4)
+            and platform.system() == "Linux"
+        ):
+            self._supports_sdpa = True
+        if get_device_type() == "iluvatar_gpu":
+            self._supports_sdpa = True
+
     def forward(
         self,
         hidden_states: paddle.Tensor,  # [B, L, D]
@@ -162,7 +182,7 @@ class SiglipAttention(nn.Layer):
             cos, sin = rope_emb
             q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
-        if q.dtype == paddle.float32:
+        if not self._supports_sdpa or q.dtype == paddle.float32:
             # → [B, H, L, Dh]
             q = q.transpose([0, 2, 1, 3])
             k = k.transpose([0, 2, 1, 3])

@@ -751,7 +751,7 @@ class DetPostProcess:
 
         filter_large_image = True
         # boxes.shape[1] == 6 is object detection, 7 is new ordered object detection, 8 is ordered object detection
-        if filter_large_image and len(boxes) > 1 and boxes.shape[1] in [6,7,8]:
+        if filter_large_image and len(boxes) > 1 and boxes.shape[1] in [6, 7, 8]:
             if img_size[0] > img_size[1]:
                 area_thres = 0.82
             else:
@@ -837,7 +837,7 @@ class DetPostProcess:
                 boxes = boxes[keep_mask]
 
         if boxes.size == 0:
-            return np.array([])
+            return []
 
         if boxes.shape[1] == 8:
             # Sort boxes by their order
@@ -847,7 +847,7 @@ class DetPostProcess:
 
         if boxes.shape[1] == 7:
             # Sort boxes by their order
-            sorted_idx = np.argsort(boxes[:, 6]) 
+            sorted_idx = np.argsort(boxes[:, 6])
             sorted_boxes = boxes[sorted_idx]
             boxes = sorted_boxes[:, :6]
 

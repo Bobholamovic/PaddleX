@@ -39,6 +39,7 @@ SKIP_ORDER_LABELS = [
     "footer",
     "footer_image",
     "footnote",
+    "aside_text",
 ]
 
 
