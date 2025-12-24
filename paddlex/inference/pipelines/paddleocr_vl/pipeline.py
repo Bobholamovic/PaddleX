@@ -46,7 +46,7 @@ from .uilts import (
     untokenize_figure_of_table,
 )
 
-IMAGE_LABELS = ["image", "header_image", "footer_image", "seal"]
+IMAGE_LABELS = ["image", "header_image", "footer_image"]
 
 
 @benchmark.time_methods
@@ -124,6 +124,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
         self.use_chart_recognition = config.get("use_chart_recognition", True)
 
+        self.use_seal_recognition = config.get("use_seal_recognition", False)
+
         vl_rec_config = config.get("SubModules", {}).get(
             "VLRecognition",
             {"model_config_error": "config error for vl_rec_model!"},
@@ -163,6 +165,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_layout_detection: Union[bool, None],
         use_polygon_points: Union[bool, None],
         use_chart_recognition: Union[bool, None],
+        use_seal_recognition: Union[bool, None],
         format_block_content: Union[bool, None],
         save_vl_images: Union[bool, None],
         merge_layout_blocks: Union[bool, None],
@@ -193,6 +196,9 @@ class _PaddleOCRVLPipeline(BasePipeline):
         if use_chart_recognition is None:
             use_chart_recognition = self.use_chart_recognition
 
+        if use_seal_recognition is None:
+            use_seal_recognition = self.use_seal_recognition
+
         if format_block_content is None:
             format_block_content = self.format_block_content
 
@@ -211,6 +217,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_doc_preprocessor=use_doc_preprocessor,
             use_layout_detection=use_layout_detection,
             use_chart_recognition=use_chart_recognition,
+            use_seal_recognition=use_seal_recognition,
             format_block_content=format_block_content,
             use_polygon_points=use_polygon_points,
             save_vl_images=save_vl_images,
@@ -243,6 +250,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         layout_det_results,
         imgs_in_doc,
         use_chart_recognition=False,
+        use_seal_recognition=False,
         vlm_kwargs=None,
         merge_layout_blocks=True,
         use_polygon_points=None,
@@ -258,6 +266,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
         image_labels = (
             IMAGE_LABELS if use_chart_recognition else IMAGE_LABELS + ["chart"]
         )
+        if not use_seal_recognition:
+            image_labels += ["seal"]
         for i, (image, layout_det_res, imgs_in_doc_for_img) in enumerate(
             zip(images, layout_det_results, imgs_in_doc)
         ):
@@ -300,6 +310,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     elif block_label == "spotting":
                         text_prompt = "Grounding:"
                         has_spotting = True
+                    elif block_label == "seal" and use_seal_recognition:
+                        text_prompt = "Seal Recognition:"
                     block_imgs.append(block_img)
                     text_prompts.append(text_prompt)
                     figure_token_maps.append(figure_token_map)
@@ -478,6 +490,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         use_layout_detection: Union[bool, None] = None,
         use_polygon_points: Union[bool, None] = None,
         use_chart_recognition: Union[bool, None] = None,
+        use_seal_recognition: Union[bool, None] = None,
         layout_threshold: Optional[Union[float, dict]] = None,
         layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
@@ -535,6 +548,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             use_layout_detection,
             use_polygon_points,
             use_chart_recognition,
+            use_seal_recognition,
             format_block_content,
             save_vl_images,
             merge_layout_blocks,
@@ -551,12 +565,15 @@ class _PaddleOCRVLPipeline(BasePipeline):
             prompt_label = prompt_label if prompt_label else "ocr"
             if prompt_label.lower() == "chart":
                 model_settings["use_chart_recognition"] = True
+            elif prompt_label.lower() == "seal":
+                model_settings["use_seal_recognition"] = True
             assert prompt_label.lower() in [
                 "ocr",
                 "formula",
                 "table",
                 "chart",
                 "spotting",
+                "seal",
             ], f"Layout detection is disabled (use_layout_detection=False). 'prompt_label' must be one of ['ocr', 'formula', 'table', 'chart'], but got '{prompt_label}'."
 
         def _process_cv(batch_data, new_batch_size=None):
@@ -733,6 +750,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 layout_det_results=layout_det_results,
                 imgs_in_doc=imgs_in_doc,
                 use_chart_recognition=model_settings["use_chart_recognition"],
+                use_seal_recognition=model_settings["use_seal_recognition"],
                 vlm_kwargs={
                     "repetition_penalty": repetition_penalty,
                     "temperature": temperature,

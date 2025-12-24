@@ -449,7 +449,10 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
             else:
                 format_chart_func = format_image_func
 
-            format_seal_func = format_image_func
+            if self["model_settings"].get("use_seal_recognition", False):
+                format_seal_func = format_image_func
+            else:
+                format_seal_func = format_text_func
 
             format_table_func = lambda block: "\n" + format_table_center_func(block)
             format_formula_func = lambda block: block.content
@@ -534,6 +537,12 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
         format_chart_func = (
             format_chart2table_func
             if self["model_settings"]["use_chart_recognition"]
+            else format_image_func
+        )
+
+        format_seal_func = (
+            format_text_func
+            if self["model_settings"]["use_seal_recognition"]
             else format_image_func
         )
 
