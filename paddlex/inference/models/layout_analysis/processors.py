@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
@@ -207,6 +207,154 @@ def unclip_boxes(boxes, unclip_ratio=None):
             (boxes[:, 0], boxes[:, 1], new_x1, new_y1, new_x2, new_y2)
         )
         return expanded_boxes
+
+
+def make_valid(poly):
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    return poly
+
+
+def calculate_polygon_overlap_ratio(
+    polygon1: List[Tuple[int, int]],
+    polygon2: List[Tuple[int, int]],
+    mode: str = "union",
+) -> float:
+    """
+    Calculate the overlap ratio between two polygons.
+
+    Args:
+        polygon1 (List[Tuple[int, int]]): First polygon represented as a list of points.
+        polygon2 (List[Tuple[int, int]]): Second polygon represented as a list of points.
+        mode (str, optional): Overlap calculation mode. Defaults to "union".
+
+    Returns:
+        float: Overlap ratio value between 0 and 1.
+    """
+    try:
+        from shapely.geometry import Polygon
+    except ImportError:
+        raise ImportError("Please install Shapely library.")
+    poly1 = Polygon(polygon1)
+    poly2 = Polygon(polygon2)
+    poly1 = make_valid(poly1)
+    poly2 = make_valid(poly2)
+    intersection = poly1.intersection(poly2).area
+    union = poly1.union(poly2).area
+    if mode == "union":
+        return intersection / union
+    elif mode == "small":
+        small_area = min(poly1.area, poly2.area)
+        return intersection / small_area
+    elif mode == "large":
+        large_area = max(poly1.area, poly2.area)
+        return intersection / large_area
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+def calculate_bbox_area(bbox):
+    """Calculate bounding box area"""
+    x1, y1, x2, y2 = map(float, bbox)
+    area = abs((x2 - x1) * (y2 - y1))
+    return area
+
+
+def calculate_overlap_ratio(
+    bbox1: Union[np.ndarray, list, tuple],
+    bbox2: Union[np.ndarray, list, tuple],
+    mode="union",
+) -> float:
+    """
+    Calculate the overlap ratio between two bounding boxes using NumPy.
+
+    Args:
+        bbox1 (np.ndarray, list or tuple): The first bounding box, format [x_min, y_min, x_max, y_max]
+        bbox2 (np.ndarray, list or tuple): The second bounding box, format [x_min, y_min, x_max, y_max]
+        mode (str): The mode of calculation, either 'union', 'small', or 'large'.
+
+    Returns:
+        float: The overlap ratio value between the two bounding boxes
+    """
+    bbox1 = np.array(bbox1)
+    bbox2 = np.array(bbox2)
+
+    x_min_inter = np.maximum(bbox1[0], bbox2[0])
+    y_min_inter = np.maximum(bbox1[1], bbox2[1])
+    x_max_inter = np.minimum(bbox1[2], bbox2[2])
+    y_max_inter = np.minimum(bbox1[3], bbox2[3])
+
+    inter_width = np.maximum(0, x_max_inter - x_min_inter)
+    inter_height = np.maximum(0, y_max_inter - y_min_inter)
+
+    inter_area = inter_width * inter_height
+
+    bbox1_area = calculate_bbox_area(bbox1)
+    bbox2_area = calculate_bbox_area(bbox2)
+
+    if mode == "union":
+        ref_area = bbox1_area + bbox2_area - inter_area
+    elif mode == "small":
+        ref_area = np.minimum(bbox1_area, bbox2_area)
+    elif mode == "large":
+        ref_area = np.maximum(bbox1_area, bbox2_area)
+    else:
+        raise ValueError(
+            f"Invalid mode {mode}, must be one of ['union', 'small', 'large']."
+        )
+
+    if ref_area == 0:
+        return 0.0
+
+    return inter_area / ref_area
+
+
+def filter_overlap_boxes(
+    src_boxes: Dict[str, List[Dict]], use_layout_mask: bool
+) -> Dict[str, List[Dict]]:
+    """
+    Remove overlapping boxes from layout detection results based on a given overlap ratio.
+
+    Args:
+        boxes (Dict[str, List[Dict]]): Layout detection result dict containing a 'boxes' list.
+
+    Returns:
+        Dict[str, List[Dict]]: Filtered dict with overlapping boxes removed.
+    """
+    boxes = [box for box in src_boxes if box["label"] != "reference"]
+    dropped_indexes = set()
+
+    for i in range(len(boxes)):
+        x1, y1, x2, y2 = boxes[i]["coordinate"]
+        w, h = x2 - x1, y2 - y1
+        if w < 2 or h < 2:
+            dropped_indexes.add(i)
+        for j in range(i + 1, len(boxes)):
+            if i in dropped_indexes or j in dropped_indexes:
+                continue
+            overlap_ratio = calculate_overlap_ratio(
+                boxes[i]["coordinate"], boxes[j]["coordinate"], "small"
+            )
+            if overlap_ratio > 0.7:
+                if use_layout_mask:
+                    poly_overlap_ratio = calculate_polygon_overlap_ratio(
+                        boxes[i]["polygon_points"], boxes[j]["polygon_points"], "small"
+                    )
+                    if poly_overlap_ratio < 0.7:
+                        continue
+                box_area_i = calculate_bbox_area(boxes[i]["coordinate"])
+                box_area_j = calculate_bbox_area(boxes[j]["coordinate"])
+                if (
+                    boxes[i]["label"] == "image" or boxes[j]["label"] == "image"
+                ) and boxes[i]["label"] != boxes[j]["label"]:
+                    continue
+                if box_area_i >= box_area_j:
+                    dropped_indexes.add(j)
+                else:
+                    dropped_indexes.add(i)
+    print(dropped_indexes)
+    out_boxes = [box for idx, box in enumerate(boxes) if idx not in dropped_indexes]
+    return out_boxes
 
 
 @benchmark.timeit
@@ -468,6 +616,7 @@ class LayoutAnalysisProcess:
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float]]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
         use_mask: Optional[bool] = None,
+        return_original_result: Optional[bool] = False,
     ) -> List[Boxes]:
         """Apply the post-processing to a batch of outputs.
 
@@ -494,5 +643,7 @@ class LayoutAnalysisProcess:
                 masks,
                 use_mask,
             )
+            if not return_original_result:
+                boxes = filter_overlap_boxes(boxes, self.labels)
             outputs.append(boxes)
         return outputs

@@ -607,6 +607,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                                 layout_unclip_ratio=layout_unclip_ratio,
                                 layout_merge_bboxes_mode=layout_merge_bboxes_mode,
                                 use_mask=model_settings["use_layout_mask"],
+                                return_original_result=True,
                             )
                         )
 

@@ -36,6 +36,7 @@ def make_valid(poly):
         poly = poly.buffer(0)
     return poly
 
+
 def calculate_polygon_overlap_ratio(
     polygon1: List[Tuple[int, int]],
     polygon2: List[Tuple[int, int]],
@@ -65,7 +66,13 @@ def calculate_polygon_overlap_ratio(
     if mode == "union":
         return intersection / union
     elif mode == "small":
-        return min(intersection / poly1.area, intersection / poly2.area)
+        small_area = min(poly1.area, poly2.area)
+        return intersection / small_area
+    elif mode == "large":
+        large_area = max(poly1.area, poly2.area)
+        return intersection / large_area
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
 
 def filter_overlap_boxes(

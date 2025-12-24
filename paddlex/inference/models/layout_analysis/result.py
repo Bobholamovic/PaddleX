@@ -124,31 +124,80 @@ def draw_mask(im, boxes, img_size):
     """
     Args:
         im (PIL.Image.Image): PIL image
-        boxes (list): a list of dictionaries representing detection box information.
-        np_masks (np.ndarray): shape:[N, im_h, im_w]
+        boxes (list): a list of dicts representing detection box information.
     Returns:
-        im (PIL.Image.Image): visualized image
+        img (PIL.Image.Image): visualized image
     """
     color_list = get_colormap(rgb=True)
-    w_ratio = 0.4
     alpha = 0.5
+
     im = np.array(im).astype("float32")
     clsid2color = {}
+
     np_masks = restore_to_draw_masks(img_size, boxes)
     im_h, im_w = im.shape[:2]
     np_masks = np_masks[:, :im_h, :im_w]
-    for i in range(len(np_masks)):
-        clsid, score = int(boxes[i]["cls_id"]), boxes[i]["score"]
-        mask = np_masks[i]
+
+    # draw mask
+    for i, mask in enumerate(np_masks):
+        clsid = int(boxes[i]["cls_id"])
         if clsid not in clsid2color:
             color_index = i % len(color_list)
-            clsid2color[clsid] = color_list[color_index]
+            clsid2color[clsid] = np.array(color_list[color_index])
         color_mask = clsid2color[clsid]
         idx = np.nonzero(mask)
-        color_mask = np.array(color_mask)
-        im[idx[0], idx[1], :] *= 1.0 - alpha
-        im[idx[0], idx[1], :] += alpha * color_mask
-    return Image.fromarray(im.astype("uint8"))
+        im[idx[0], idx[1], :] = (1.0 - alpha) * im[
+            idx[0], idx[1], :
+        ] + alpha * color_mask
+
+    img = Image.fromarray(np.uint8(im))
+    font_size = int(0.018 * img.width) + 2
+    font = ImageFont.truetype(PINGFANG_FONT.path, font_size, encoding="utf-8")
+    draw = ImageDraw.Draw(img)
+    label2color = {}
+    catid2fontcolor = {}
+
+    for i, box_info in enumerate(boxes):
+        label = box_info["label"]
+        score = box_info["score"]
+        if label not in label2color:
+            color_index = i % len(color_list)
+            label2color[label] = color_list[color_index]
+            catid2fontcolor[label] = font_colormap(color_index)
+        color = tuple(label2color[label])
+        font_color = tuple(catid2fontcolor[label])
+
+        polygon_points = box_info["polygon_points"]
+        left_top = min(polygon_points, key=lambda p: (p[1], p[0]))
+        right_top = min(polygon_points, key=lambda p: (p[1], -p[0]))
+
+        # label
+        text = "{} {:.2f}".format(label, score)
+        if tuple(map(int, PIL.__version__.split("."))) <= (10, 0, 0):
+            tw, th = draw.textsize(text, font=font)
+        else:
+            left, top, right, bottom = draw.textbbox((0, 0), text, font)
+            tw, th = right - left, bottom - top + 4
+        lx, ly = left_top
+        if ly < th:
+            draw.rectangle([(lx, ly), (lx + tw + 4, ly + th + 1)], fill=color)
+            draw.text((lx + 2, ly - 2), text, fill=font_color, font=font)
+        else:
+            draw.rectangle([(lx, ly - th), (lx + tw + 4, ly + 1)], fill=color)
+            draw.text((lx + 2, ly - th - 2), text, fill=font_color, font=font)
+
+        # order
+        order_text = str(i + 1)
+        rx, ry = right_top
+        text_position = (rx + 2, ry - font_size // 2)
+        if int(img.width) - rx < font_size:
+            text_position = (
+                int(rx - font_size * 1.1),
+                ry - font_size // 2,
+            )
+        draw.text(text_position, order_text, font=font, fill="red")
+
+    return img
 
 
 class LayoutAnalysisResult(BaseCVResult):
@@ -160,7 +209,9 @@ class LayoutAnalysisResult(BaseCVResult):
         ori_img_size = list(image.size)[::-1]
         if len(boxes) > 0 and "polygon_points" in boxes[0]:
             image = draw_mask(image, boxes, ori_img_size)
-        return {"res": draw_box(image, boxes)}
+        else:
+            image = draw_box(image, boxes)
+        return {"res": image}
 
     def _to_str(self, *args, **kwargs):
         data = copy.deepcopy(self)

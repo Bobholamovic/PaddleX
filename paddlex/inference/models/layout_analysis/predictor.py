@@ -74,6 +74,7 @@ class LayoutAnalysisPredictor(DetPredictor):
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
         use_mask: Optional[bool] = None,
+        return_original_result: Optional[bool] = False,
     ):
         """
         Process a batch of data through the preprocessing, inference, and postprocessing.
@@ -112,6 +113,7 @@ class LayoutAnalysisPredictor(DetPredictor):
             layout_merge_bboxes_mode=layout_merge_bboxes_mode
             or self.layout_merge_bboxes_mode,
             use_mask=use_mask if use_mask is not None else self.use_mask,
+            return_original_result=return_original_result,
         )
 
         return {
