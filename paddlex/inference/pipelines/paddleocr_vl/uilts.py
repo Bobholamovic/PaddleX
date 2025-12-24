@@ -76,7 +76,7 @@ def calculate_polygon_overlap_ratio(
 
 
 def filter_overlap_boxes(
-    layout_det_res: Dict[str, List[Dict]], use_layout_mask: bool
+    layout_det_res: Dict[str, List[Dict]], use_polygon_points: bool
 ) -> Dict[str, List[Dict]]:
     """
     Remove overlapping boxes from layout detection results based on a given overlap ratio.
@@ -105,7 +105,7 @@ def filter_overlap_boxes(
                 boxes[i]["coordinate"], boxes[j]["coordinate"], "small"
             )
             if overlap_ratio > 0.7:
-                if use_layout_mask:
+                if use_polygon_points:
                     poly_overlap_ratio = calculate_polygon_overlap_ratio(
                         boxes[i]["polygon_points"], boxes[j]["polygon_points"], "small"
                     )
@@ -174,7 +174,7 @@ def calc_merged_wh(images):
     return w, h
 
 
-def merge_images(images, aligns="center", use_layout_mask=False):
+def merge_images(images, aligns="center", use_polygon_points=False):
     """
     Merge images vertically with given alignment.
 
@@ -214,7 +214,7 @@ def merge_images(images, aligns="center", use_layout_mask=False):
     return to_np_array(merged)
 
 
-def merge_blocks(blocks, non_merge_labels, use_layout_mask=False):
+def merge_blocks(blocks, non_merge_labels, use_polygon_points=False):
     """
     Merge blocks based on alignment and overlap logic, except for those with labels in non_merge_labels.
 
@@ -347,7 +347,7 @@ def merge_blocks(blocks, non_merge_labels, use_layout_mask=False):
                         result_blocks.append(block)
                         used_indices.add(block_idx)
                 else:
-                    merged_img = merge_images(imgs, merge_aligns, use_layout_mask)
+                    merged_img = merge_images(imgs, merge_aligns, use_polygon_points)
                     for j, block_idx in enumerate(group_indices):
                         block = blocks[block_idx].copy()
                         block["img"] = merged_img if j == 0 else None
@@ -1009,3 +1009,43 @@ def crop_margin(img):
     cropped = img[y : y + h, x : x + w]
 
     return cropped
+
+
+ANNOT_TEXT_RE = re.compile(r"<\|TEXT_START\|>(.*?)<\|TEXT_END\|>", re.S)
+LOC_BLOCK_RE = re.compile(r"<\|LOC_BEGIN\|>(.*?)<\|LOC_END\|>", re.S)
+LOC_ITEM_RE = re.compile(r"<\|LOC_(\d+)\|>")
+
+
+def post_process_for_grounding(
+    input_str: str, w: int, h: int
+) -> Tuple[str, Dict[str, List]]:
+    """
+    提取模型输出中的文本和多边形坐标，并组合为 result_str 和 grounding_res 格式。
+    """
+    assert isinstance(input_str, str)
+
+    texts = ANNOT_TEXT_RE.findall(input_str)
+    loc_blocks = LOC_BLOCK_RE.findall(input_str)
+
+    dt_polys = []
+    rec_texts = []
+
+    n = min(len(texts), len(loc_blocks))
+    for i in range(n):
+        txt = texts[i].strip()
+        loc_items = LOC_ITEM_RE.findall(loc_blocks[i])
+        if len(loc_items) < 8:
+            continue
+        # 只取前8个坐标点（四边形），每2个为一个点
+        vals = list(map(int, loc_items[:8]))
+        pts = [(vals[j], vals[j + 1]) for j in range(0, 8, 2)]
+        pts = [(p[0] / 1000.0 * w, p[1] / 1000.0 * h) for p in pts]
+        dt_polys.append(pts)
+        rec_texts.append(txt)
+
+    # 拼接文本
+    result_str = "\n\n".join(rec_texts)
+
+    # 返回结果
+    grounding_res = {"dt_polys": dt_polys, "rec_texts": rec_texts}
+    return result_str, grounding_res

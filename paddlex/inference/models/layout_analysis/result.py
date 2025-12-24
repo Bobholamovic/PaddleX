@@ -187,15 +187,17 @@ def draw_mask(im, boxes, img_size):
             draw.text((lx + 2, ly - th - 2), text, fill=font_color, font=font)
 
         # order
-        order_text = str(i + 1)
-        rx, ry = right_top
-        text_position = (rx + 2, ry - font_size // 2)
-        if int(img.width) - rx < font_size:
-            text_position = (
-                int(rx - font_size * 1.1),
-                ry - font_size // 2,
-            )
-        draw.text(text_position, order_text, font=font, fill="red")
+        order = box_info.get("order", None)
+        if order:
+            order_text = str(order)
+            rx, ry = right_top
+            text_position = (rx + 2, ry - font_size // 2)
+            if int(img.width) - rx < font_size:
+                text_position = (
+                    int(rx - font_size * 1.1),
+                    ry - font_size // 2,
+                )
+            draw.text(text_position, order_text, font=font, fill="red")
 
     return img
 

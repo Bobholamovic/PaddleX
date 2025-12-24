@@ -74,7 +74,7 @@ class CropByBoxes(BaseOperator):
                 mask = mask.astype(bool)
                 img_crop[~mask] = 255
                 out_info["img"] = img_crop
-                out_info["mask"] = mask
+                out_info["polygon_points"] = box_info["polygon_points"]
 
             output_list.append(out_info)
         return output_list

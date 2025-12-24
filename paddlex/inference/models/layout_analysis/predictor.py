@@ -30,7 +30,7 @@ class LayoutAnalysisPredictor(DetPredictor):
         self,
         *args,
         img_size: Optional[Union[int, Tuple[int, int]]] = None,
-        use_mask: bool = True,
+        use_polygon_points: bool = True,
         **kwargs,
     ):
         """Initializes LayoutAnalysisPredictor.
@@ -60,7 +60,7 @@ class LayoutAnalysisPredictor(DetPredictor):
                 raise ValueError(
                     f"The type of `img_size` must be int or Tuple[int, int], but got {type(img_size)}."
                 )
-        self.use_mask = use_mask
+        self.use_polygon_points = use_polygon_points
         super().__init__(*args, **kwargs)
 
     def _get_result_class(self):
@@ -73,8 +73,9 @@ class LayoutAnalysisPredictor(DetPredictor):
         layout_nms: bool = False,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]] = None,
         layout_merge_bboxes_mode: Optional[Union[str, dict]] = None,
-        use_mask: Optional[bool] = None,
-        return_original_result: Optional[bool] = False,
+        use_polygon_points: Optional[bool] = None,
+        filter_overlap_boxes: Optional[bool] = True,
+        skip_order_labels: Optional[List[str]] = None,
     ):
         """
         Process a batch of data through the preprocessing, inference, and postprocessing.
@@ -112,8 +113,13 @@ class LayoutAnalysisPredictor(DetPredictor):
             layout_unclip_ratio=layout_unclip_ratio or self.layout_unclip_ratio,
             layout_merge_bboxes_mode=layout_merge_bboxes_mode
             or self.layout_merge_bboxes_mode,
-            use_mask=use_mask if use_mask is not None else self.use_mask,
-            return_original_result=return_original_result,
+            use_polygon_points=(
+                use_polygon_points
+                if use_polygon_points is not None
+                else self.use_polygon_points
+            ),
+            filter_overlap_boxes=filter_overlap_boxes,
+            skip_order_labels=skip_order_labels,
         )
 
         return {

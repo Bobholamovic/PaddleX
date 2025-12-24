@@ -28,6 +28,20 @@ Boxes = List[dict]
 Number = Union[int, float]
 
 
+SKIP_ORDER_LABELS = [
+    "figure_title",
+    "vision_footnote",
+    "image",
+    "chart",
+    "table",
+    "header",
+    "header_image",
+    "footer",
+    "footer_image",
+    "footnote",
+]
+
+
 @function_requires_deps("opencv-contrib-python")
 def mask2polygon(mask, epsilon_ratio=0.004):
     """
@@ -140,6 +154,7 @@ def restructured_boxes(
             "label": labels[int(box[0])],
             "score": float(box[1]),
             "coordinate": [xmin, ymin, xmax, ymax],
+            "order": idx + 1,
         }
         if polygon_points is not None:
             polygon_point = polygon_points[idx]
@@ -309,7 +324,7 @@ def calculate_overlap_ratio(
     return inter_area / ref_area
 
 
-def filter_overlap_boxes(
+def filter_boxes(
     src_boxes: Dict[str, List[Dict]], use_layout_mask: bool
 ) -> Dict[str, List[Dict]]:
     """
@@ -352,9 +367,47 @@ def filter_overlap_boxes(
                     dropped_indexes.add(j)
                 else:
                     dropped_indexes.add(i)
-    print(dropped_indexes)
     out_boxes = [box for idx, box in enumerate(boxes) if idx not in dropped_indexes]
     return out_boxes
+
+
+def update_order_index(boxes: List[Dict], skip_order_labels: List[str]):
+    """
+    Update the 'order_index' field of each box in the provided list of boxes.
+
+    Args:
+        boxes (List[Dict]): A list of boxes, where each box is represented as a dictionary with an 'order_index' field.
+
+    Returns:
+        None. The  function updates the 'order_index' field of each box in the input list.
+    """
+    order_index = 1
+    for box in boxes:
+        label = box["label"]
+        if label not in skip_order_labels:
+            box["order"] = order_index
+            order_index += 1
+        else:
+            box["order"] = None
+    return boxes
+
+
+def find_label_position(box, polygon_points, text_w, text_h, max_shift=50):
+    try:
+        from shapely.geometry import Polygon
+    except ImportError:
+        raise ImportError("Please install Shapely library.")
+    poly = Polygon(polygon_points)
+    min_x = min([p[0] for p in polygon_points])
+    min_y = min([p[1] for p in polygon_points])
+    for dy in range(max_shift):
+        x1, y1 = min_x, min_y + dy
+        x2, y2 = x1 + text_w, y1 + text_h
+        label_rect = box(x1, y1, x2, y2)
+        if poly.intersects(label_rect):
+            return int(x1), int(y1)
+
+    return int(min_x), int(min_y)
 
 
 @benchmark.timeit
@@ -389,7 +442,7 @@ class LayoutAnalysisProcess:
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]],
         layout_merge_bboxes_mode: Optional[Union[str, dict]],
         masks: Optional[ndarray] = None,
-        use_mask: Optional[bool] = None,
+        use_polygon_points: Optional[bool] = None,
     ) -> Boxes:
         """Apply post-processing to the detection boxes.
 
@@ -401,7 +454,7 @@ class LayoutAnalysisProcess:
             Boxes: The post-processed detection boxes.
         """
         polygon_points = None
-        if not use_mask:
+        if not use_polygon_points:
             masks = None
         boxes[:, 2:6] = np.round(boxes[:, 2:6]).astype(int)
         if isinstance(threshold, float):
@@ -615,8 +668,9 @@ class LayoutAnalysisProcess:
         layout_nms: Optional[bool] = None,
         layout_unclip_ratio: Optional[Union[float, Tuple[float, float]]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
-        use_mask: Optional[bool] = None,
-        return_original_result: Optional[bool] = False,
+        use_polygon_points: Optional[bool] = None,
+        filter_overlap_boxes: Optional[bool] = None,
+        skip_order_labels: Optional[List[str]] = None,
     ) -> List[Boxes]:
         """Apply the post-processing to a batch of outputs.
 
@@ -641,9 +695,13 @@ class LayoutAnalysisProcess:
                 layout_unclip_ratio,
                 layout_merge_bboxes_mode,
                 masks,
-                use_mask,
+                use_polygon_points,
             )
-            if not return_original_result:
-                boxes = filter_overlap_boxes(boxes, self.labels)
+            if filter_overlap_boxes:
+                boxes = filter_boxes(boxes, self.labels)
+            skip_order_labels = (
+                skip_order_labels if skip_order_labels else SKIP_ORDER_LABELS
+            )
+            boxes = update_order_index(boxes, skip_order_labels)
             outputs.append(boxes)
         return outputs
