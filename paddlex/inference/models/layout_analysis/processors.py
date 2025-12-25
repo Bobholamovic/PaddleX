@@ -682,7 +682,6 @@ class LayoutAnalysisProcess:
         Returns:
             List[Boxes]: The list of post-processed detection boxes.
         """
-        print(use_polygon_points)
         outputs = []
         for data, output in zip(datas, batch_outputs):
             if "masks" in output:

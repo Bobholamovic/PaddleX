@@ -274,12 +274,6 @@ class _PaddleOCRVLPipeline(BasePipeline):
             layout_det_res = filter_overlap_boxes(layout_det_res, use_polygon_points)
             boxes = layout_det_res["boxes"]
             blocks_for_img = self.crop_by_boxes(image, boxes, use_polygon_points)
-            blocks_for_img = merge_blocks(
-                blocks_for_img,
-                non_merge_labels=image_labels + ["table"],
-                use_polygon_points=use_polygon_points,
-            )
-            blocks_for_img = self.crop_by_boxes(image, boxes)
             if merge_layout_blocks:
                 blocks_for_img = merge_blocks(
                     blocks_for_img, non_merge_labels=image_labels + ["table"]
@@ -446,7 +440,6 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         )
 
                     block_content = result_str
-
                 block_info = PaddleOCRVLBlock(
                     label=block_label,
                     bbox=block_bbox,
