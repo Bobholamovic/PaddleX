@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+# TODO: Include dev version
 paddlex_version="$(cat ../../../paddlex/.version)"
 
 for device_type in 'gpu' 'cpu'; do
