@@ -287,6 +287,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             layout_det_res = filter_overlap_boxes(layout_det_res, use_polygon_points)
             boxes = layout_det_res["boxes"]
             blocks_for_img = self.crop_by_boxes(image, boxes, use_polygon_points)
+            del layout_det_res, boxes
             if merge_layout_blocks:
                 blocks_for_img = merge_blocks(
                     blocks_for_img, non_merge_labels=image_labels + ["table"]
@@ -368,6 +369,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     batch_dict_by_pixel[pixel_key]["vlm_block_ids"].append((i, j))
                     id2pixel_key_map[(i, j)] = pixel_key
                     drop_figures_set.update(drop_figures)
+            del blocks_for_img
+        del images, layout_det_results
 
         if vlm_kwargs is None:
             vlm_kwargs = {}
@@ -400,6 +403,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     **kwargs,
                 )
             )
+            del images, queries
             batch_dict_by_pixel[pixel_key]["vlm_results"] = batch_results
 
         parsing_res_lists = []
@@ -487,6 +491,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             parsing_res_lists.append(parsing_res_list)
             table_res_lists.append(table_res_list)
             spotting_res_list.append(spotting_res)
+            del parsing_res_list, table_res_list, spotting_res
 
         return (
             parsing_res_lists,
@@ -768,6 +773,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         break
                     else:
                         queue_input.put((True, batch_data))
+                        del batch_data
                 event_data_loading_done.set()
 
             def _worker_cv():
@@ -792,6 +798,8 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             ),
                         ):
                             queue_cv.put((True, results_cv))
+                            del results_cv
+                        del item
                     except Exception as e:
                         queue_cv.put((False, "cv", e))
                         break
@@ -820,6 +828,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                             should_break = True
                             break
                         results_cv_list.append(item[1])
+                        del item
                         for res in results_cv_list[-1][5]:
                             num_boxes += len(res["boxes"])
                         if num_boxes >= MAX_NUM_BOXES:
@@ -836,10 +845,13 @@ class _PaddleOCRVLPipeline(BasePipeline):
                         list(chain.from_iterable(lists))
                         for lists in zip(*results_cv_list)
                     ]
+                    del results_cv_list
 
                     try:
                         for result_vlm in _process_vlm(merged_results_cv):
                             queue_vlm.put((True, result_vlm))
+                            del result_vlm
+                        del merged_results_cv
                     except Exception as e:
                         queue_vlm.put((False, "vlm", e))
                         break
@@ -875,6 +887,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     results_cv = results_cv_list[0]
                     for res in _process_vlm(results_cv):
                         yield res
+                    del res, results_cv, results_cv_list, batch_data
         finally:
             if use_queues:
                 event_shutdown.set()
