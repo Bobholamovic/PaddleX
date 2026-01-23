@@ -31,6 +31,7 @@ from PIL import Image
 from typing_extensions import Literal, ParamSpec, TypeAlias, assert_never
 
 from ....utils.deps import function_requires_deps, is_dep_available
+from ....utils.flags import PDF_RENDER_SCALE
 from .models import ImageInfo, PDFInfo, PDFPageInfo
 
 if is_dep_available("aiohttp"):
@@ -193,8 +194,7 @@ def read_pdf(
             for page in doc:
                 if max_num_imgs is not None and len(images) >= max_num_imgs:
                     break
-                # TODO: Do not always use zoom=2.0
-                zoom = 2.0
+                zoom = PDF_RENDER_SCALE
                 deg = 0
                 image = page.render(scale=zoom, rotation=deg).to_numpy()
                 images.append(image)
