@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
 
 
 class PPLCNetConfig(PretrainedConfig):
-    model_type = "cls"
+    model_type = "pp_lcnet"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
