@@ -14,6 +14,8 @@
 
 from typing import Any, List, Optional
 
+import re
+
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
@@ -271,6 +273,76 @@ class SEModule(nn.Layer):
         return x
 
 
+def _convert_hf_to_paddledet_lcnet(state_dict):
+    """Convert HF PPLCNet safetensors keys to PaddleDet PPLCNet keys.
+
+    HF naming → PaddleDet naming:
+      encoder.convolution.convolution.* → conv1.conv.*
+      encoder.convolution.normalization.* → conv1.bn.*
+      encoder.blocks.{N}.layers.{I}.depthwise_convolution.convolution.* → blocks{N+2}.{I}.dw_conv.conv.*
+      encoder.blocks.{N}.layers.{I}.depthwise_convolution.normalization.* → blocks{N+2}.{I}.dw_conv.bn.*
+      encoder.blocks.{N}.layers.{I}.pointwise_convolution.convolution.* → blocks{N+2}.{I}.pw_conv.conv.*
+      encoder.blocks.{N}.layers.{I}.pointwise_convolution.normalization.* → blocks{N+2}.{I}.pw_conv.bn.*
+      encoder.blocks.{N}.layers.{I}.squeeze_excitation_module.convolutions.0.* → blocks{N+2}.{I}.se.conv1.*
+      encoder.blocks.{N}.layers.{I}.squeeze_excitation_module.convolutions.2.* → blocks{N+2}.{I}.se.conv2.*
+      head.* → fc.*
+      last_convolution.weight → last_conv.weight
+    """
+    import numpy as np
+
+    new_sd = {}
+    for key, value in state_dict.items():
+        new_key = key
+
+        # Skip num_batches_tracked
+        if "num_batches_tracked" in key:
+            continue
+
+        # encoder.convolution.* → conv1.*
+        if new_key.startswith("encoder.convolution."):
+            new_key = new_key.replace("encoder.convolution.", "conv1.")
+            new_key = new_key.replace("convolution.", "conv.")
+            new_key = new_key.replace("normalization.", "bn.")
+            new_sd[new_key] = value
+            continue
+
+        # encoder.blocks.{N}.layers.{I}.* → blocks{N+2}.{I}.*
+        m = re.match(r"encoder\.blocks\.(\d+)\.layers\.(\d+)\.(.*)", new_key)
+        if m:
+            block_idx = int(m.group(1)) + 2
+            layer_idx = m.group(2)
+            rest = m.group(3)
+
+            rest = rest.replace("depthwise_convolution.convolution.", "dw_conv.conv.")
+            rest = rest.replace("depthwise_convolution.normalization.", "dw_conv.bn.")
+            rest = rest.replace("pointwise_convolution.convolution.", "pw_conv.conv.")
+            rest = rest.replace("pointwise_convolution.normalization.", "pw_conv.bn.")
+            rest = rest.replace("squeeze_excitation_module.convolutions.0.", "se.conv1.")
+            rest = rest.replace("squeeze_excitation_module.convolutions.2.", "se.conv2.")
+
+            new_key = f"blocks{block_idx}.{layer_idx}.{rest}"
+            new_sd[new_key] = value
+            continue
+
+        # head.* → fc.*
+        if new_key.startswith("head."):
+            new_key = new_key.replace("head.", "fc.")
+            # Transpose fc weight: HF [out, in] → Paddle [in, out]
+            if new_key == "fc.weight" and hasattr(value, "ndim") and value.ndim == 2:
+                value = paddle.to_tensor(np.array(value).T)
+            new_sd[new_key] = value
+            continue
+
+        # last_convolution.weight → last_conv.weight
+        if new_key == "last_convolution.weight":
+            new_sd["last_conv.weight"] = value
+            continue
+
+        new_sd[new_key] = value
+
+    return new_sd
+
+
 class PPLCNet(BatchNormHFStateDictMixin, PretrainedModel):
     """
     PPLCNet: Lightweight convolutional neural network for image classification tasks
@@ -414,6 +486,13 @@ class PPLCNet(BatchNormHFStateDictMixin, PretrainedModel):
         x = self.out_act(x)
 
         return [x.cpu().numpy()]
+
+    def set_hf_state_dict(self, state_dict, *args, **kwargs):
+        """Convert HF safetensors keys to PaddleDet PPLCNet keys and load."""
+        converted = _convert_hf_to_paddledet_lcnet(state_dict)
+        state_dict.clear()
+        state_dict.update(converted)
+        return super().set_hf_state_dict(state_dict, *args, **kwargs)
 
     def get_transpose_weight_keys(self):
         t_layers = ["fc"]

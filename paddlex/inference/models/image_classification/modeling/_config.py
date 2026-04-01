@@ -43,14 +43,18 @@ DEFAULT_CONFIG = {
 
 
 class PPLCNetConfig(PretrainedConfig):
-    model_type = "cls"
+    model_type = "pp_lcnet"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
         self.model_name = kwargs.get("model_name", DEFAULT_CONFIG["model_name"])
         self.scale = kwargs.get("scale", DEFAULT_CONFIG["scale"])
-        self.class_num = kwargs.get("class_num", DEFAULT_CONFIG["class_num"])
+        id2label = kwargs.get("id2label", None)
+        if id2label is not None:
+            self.class_num = len(id2label)
+        else:
+            self.class_num = kwargs.get("class_num", DEFAULT_CONFIG["class_num"])
         self.stride_list = kwargs.get("stride_list", DEFAULT_CONFIG["stride_list"])
         self.reduction = kwargs.get("reduction", DEFAULT_CONFIG["reduction"])
         self.dropout_prob = kwargs.get("dropout_prob", DEFAULT_CONFIG["dropout_prob"])

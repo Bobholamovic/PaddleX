@@ -14,6 +14,8 @@
 
 from __future__ import absolute_import, division, print_function
 
+import re
+
 import paddle
 import paddle.nn.functional as F
 
@@ -218,6 +220,7 @@ class RTDETRConfig(PretrainedConfig):
         num_denoising=100,
         label_noise_ratio=0.5,
         box_noise_scale=1.0,
+        num_labels=80,
         learn_initial_query=False,
         anchor_image_size=None,
         disable_custom_kernels=True,
@@ -271,6 +274,12 @@ class RTDETRConfig(PretrainedConfig):
         self.tf_label_noise_ratio = label_noise_ratio
         self.tf_box_noise_scale = box_noise_scale
         self.tf_learnt_init_query = learn_initial_query
+        # Derive num_labels from id2label if present (HF convention)
+        id2label = kwargs.get("id2label", None)
+        if id2label is not None:
+            self.tf_num_classes = len(id2label)
+        else:
+            self.tf_num_classes = num_labels
         self.loss_coeff = {
             "class": weight_loss_vfl,
             "bbox": weight_loss_bbox,
@@ -284,6 +293,194 @@ class RTDETRConfig(PretrainedConfig):
         }
         self.use_focal_loss = use_focal_loss
         self.tensor_parallel_degree = 1
+
+
+def _convert_hf_to_paddledet(state_dict, model):
+    """Convert HF RT-DETR safetensors keys to PaddleDet RTDETR keys.
+
+    Reverse of the conversion in convert_rtdetr_l.py:
+      HF key format (model.backbone.model.embedder.*)
+      → PaddleDet key format (backbone.stem.*)
+    Also merges split q/k/v projections back into fused in_proj and
+    transposes Linear weights (torch [out,in] → paddle [in,out]).
+    """
+    import numpy as np
+
+    transpose_keys = set(model.get_transpose_weight_keys())
+
+    new_sd = {}
+    # Collect q/k/v for merging into in_proj
+    qkv_buffer = {}  # base_key -> {"q_proj.weight": val, ...}
+
+    for key, value in state_dict.items():
+        new_key = key
+
+        # Skip num_batches_tracked (not used in Paddle)
+        if "num_batches_tracked" in key:
+            continue
+
+        # ── Backbone: model.backbone.model.* → backbone.* ──
+        if new_key.startswith("model.backbone.model."):
+            new_key = new_key[len("model.backbone.model."):]
+            new_key = new_key.replace("embedder.", "stem.")
+            new_key = new_key.replace("encoder.stages.", "stages.")
+            new_key = new_key.replace(".aggregation.0.", ".aggregation_squeeze_conv.")
+            new_key = new_key.replace(".aggregation.1.", ".aggregation_excitation_conv.")
+            new_key = re.sub(r"\.convolution\.(\w+)$", r".conv.\1", new_key)
+            new_key = re.sub(r"\.normalization\.(\w+)$", r".bn.\1", new_key)
+            new_key = "backbone." + new_key
+            new_sd[new_key] = value
+            continue
+
+        # ── Encoder input proj: model.encoder_input_proj.* → neck.input_proj.* ──
+        if new_key.startswith("model.encoder_input_proj."):
+            new_key = new_key.replace("model.encoder_input_proj.", "neck.input_proj.")
+            new_sd[new_key] = value
+            continue
+
+        # ── Encoder AIFI: model.encoder.aifi.* → neck.encoder.* ──
+        if new_key.startswith("model.encoder.aifi."):
+            new_key = new_key.replace("model.encoder.aifi.", "neck.encoder.")
+            # Reverse naming: o_proj → out_proj, mlp.fc1 → linear1, etc.
+            new_key = new_key.replace(".self_attn.o_proj.", ".self_attn.out_proj.")
+            new_key = new_key.replace(".mlp.fc1.", ".linear1.")
+            new_key = new_key.replace(".mlp.fc2.", ".linear2.")
+            new_key = new_key.replace(".self_attn_layer_norm.", ".norm1.")
+            new_key = new_key.replace(".final_layer_norm.", ".norm2.")
+
+            # q/k/v_proj → collect for merging into in_proj
+            m = re.match(r"(.*\.self_attn\.)(q|k|v)_proj\.(weight|bias)$", new_key)
+            if m:
+                base = m.group(1)
+                qkv = m.group(2)
+                wb = m.group(3)
+                buf_key = base + "in_proj_" + wb
+                if buf_key not in qkv_buffer:
+                    qkv_buffer[buf_key] = {}
+                qkv_buffer[buf_key][qkv] = value
+                continue
+
+            new_sd[new_key] = value
+            continue
+
+        # ── Encoder conv blocks: model.encoder.{fpn,pan,lateral,downsample}.* → neck.* ──
+        if re.match(r"model\.encoder\.(fpn_blocks|pan_blocks|lateral_convs|downsample_convs)\.", new_key):
+            new_key = new_key.replace("model.encoder.", "neck.")
+            new_key = re.sub(r"\.norm\.(\w+)$", r".bn.\1", new_key)
+            new_sd[new_key] = value
+            continue
+
+        # ── Decoder input proj: model.decoder_input_proj.N.0.* → transformer.input_proj.N.conv.* ──
+        #                        model.decoder_input_proj.N.1.* → transformer.input_proj.N.norm.*
+        if new_key.startswith("model.decoder_input_proj."):
+            new_key = new_key.replace("model.decoder_input_proj.", "transformer.input_proj.")
+            new_key = re.sub(r"\.0\.(\w+)$", r".conv.\1", new_key)
+            new_key = re.sub(r"\.1\.(\w+)$", r".norm.\1", new_key)
+            new_sd[new_key] = value
+            continue
+
+        # ── Decoder class/bbox embed → dec_score/bbox_head ──
+        if new_key.startswith("model.decoder.class_embed."):
+            new_key = new_key.replace("model.decoder.class_embed.", "transformer.dec_score_head.")
+            new_sd[new_key] = value
+            continue
+        if new_key.startswith("model.decoder.bbox_embed."):
+            new_key = new_key.replace("model.decoder.bbox_embed.", "transformer.dec_bbox_head.")
+            new_sd[new_key] = value
+            continue
+
+        # ── Decoder query_pos_head ──
+        if new_key.startswith("model.decoder.query_pos_head."):
+            new_key = new_key.replace("model.decoder.", "transformer.")
+            new_sd[new_key] = value
+            continue
+
+        # ── Decoder layers: model.decoder.layers.* → transformer.decoder.layers.* ──
+        if new_key.startswith("model.decoder.layers."):
+            new_key = new_key.replace("model.decoder.layers.", "transformer.decoder.layers.")
+            # Reverse naming
+            new_key = new_key.replace(".self_attn.o_proj.", ".self_attn.out_proj.")
+            new_key = new_key.replace(".encoder_attn.", ".cross_attn.")
+            new_key = new_key.replace(".mlp.fc1.", ".linear1.")
+            new_key = new_key.replace(".mlp.fc2.", ".linear2.")
+            new_key = new_key.replace(".self_attn_layer_norm.", ".norm1.")
+            new_key = new_key.replace(".encoder_attn_layer_norm.", ".norm2.")
+            new_key = new_key.replace(".final_layer_norm.", ".norm3.")
+
+            # q/k/v_proj → collect for merging into in_proj
+            m = re.match(r"(.*\.self_attn\.)(q|k|v)_proj\.(weight|bias)$", new_key)
+            if m:
+                base = m.group(1)
+                qkv = m.group(2)
+                wb = m.group(3)
+                buf_key = base + "in_proj_" + wb
+                if buf_key not in qkv_buffer:
+                    qkv_buffer[buf_key] = {}
+                qkv_buffer[buf_key][qkv] = value
+                continue
+
+            new_sd[new_key] = value
+            continue
+
+        # ── Encoder heads: model.enc_* → transformer.enc_* ──
+        if new_key.startswith("model.enc_"):
+            new_key = new_key.replace("model.", "transformer.")
+            new_sd[new_key] = value
+            continue
+
+        # ── enc_output: model.enc_output.* → transformer.enc_output.* ──
+        if new_key.startswith("model.enc_output."):
+            new_key = new_key.replace("model.", "transformer.")
+            new_sd[new_key] = value
+            continue
+
+        # ── denoising_class_embed ──
+        if new_key.startswith("model.denoising_class_embed."):
+            new_key = new_key.replace("model.", "transformer.")
+            # HF has [num_labels+1, dim], PaddleDet has [num_labels, dim] — trim padding row
+            if "weight" in new_key:
+                value = value[:-1]
+            new_sd[new_key] = value
+            continue
+
+    # Merge q/k/v into fused in_proj
+    for in_proj_key, parts in qkv_buffer.items():
+        if "weight" in in_proj_key:
+            # HF: q/k/v each [dim, dim] (already transposed from torch [out,in])
+            # PaddleDet in_proj_weight: [dim, 3*dim]
+            q = np.array(parts["q"]).T  # [dim, dim] → [dim, dim] (reverse torch transpose)
+            k = np.array(parts["k"]).T
+            v = np.array(parts["v"]).T
+            merged = np.concatenate([q, k, v], axis=1)  # [dim, 3*dim]
+            new_sd[in_proj_key] = paddle.to_tensor(merged)
+        else:
+            # bias: just concatenate [dim] * 3 → [3*dim]
+            q = np.array(parts["q"])
+            k = np.array(parts["k"])
+            v = np.array(parts["v"])
+            new_sd[in_proj_key] = paddle.to_tensor(np.concatenate([q, k, v]))
+
+    # Transpose Linear weights: torch [out,in] → paddle [in,out]
+    for key in list(new_sd.keys()):
+        val = new_sd[key]
+        if not hasattr(val, "ndim"):
+            val = paddle.to_tensor(np.array(val))
+            new_sd[key] = val
+        if val.ndim == 2 and key in transpose_keys:
+            new_sd[key] = paddle.to_tensor(np.array(val).T)
+        elif val.ndim == 2 and any(p in key for p in [
+            "linear1.weight", "linear2.weight",
+            "enc_score_head.weight", "enc_output.",
+            "dec_score_head.", "dec_bbox_head.", "enc_bbox_head.",
+            "query_pos_head.",
+            "cross_attn.sampling_offsets.weight",
+            "cross_attn.attention_weights.weight",
+            "cross_attn.value_proj.weight",
+            "cross_attn.output_proj.weight",
+        ]) and "bias" not in key:
+            new_sd[key] = paddle.to_tensor(np.array(val).T)
+
+    return new_sd
 
 
 class RTDETR(BatchNormHFStateDictMixin, PretrainedModel):
@@ -315,6 +512,7 @@ class RTDETR(BatchNormHFStateDictMixin, PretrainedModel):
             expansion=self.config.expansion,
         )
         self.transformer = RTDETRTransformer(
+            num_classes=self.config.tf_num_classes,
             num_queries=self.config.tf_num_queries,
             feat_strides=self.config.tf_feat_strides,
             backbone_feat_channels=self.config.tf_backbone_feat_channels,
@@ -339,6 +537,7 @@ class RTDETR(BatchNormHFStateDictMixin, PretrainedModel):
             )
         )
         self.post_process = DETRPostProcess(
+            num_classes=self.config.tf_num_classes,
             num_top_queries=self.config.tf_num_queries,
             use_focal_loss=self.config.use_focal_loss,
         )
@@ -357,6 +556,14 @@ class RTDETR(BatchNormHFStateDictMixin, PretrainedModel):
         )
         output = [bbox, bbox_num]
         return output
+
+    def set_hf_state_dict(self, state_dict, *args, **kwargs):
+        """Convert HF safetensors keys to PaddleDet keys and load."""
+        converted = _convert_hf_to_paddledet(state_dict, self)
+        # Must update in-place: the caller also calls set_state_dict on same dict
+        state_dict.clear()
+        state_dict.update(converted)
+        return super().set_hf_state_dict(state_dict, *args, **kwargs)
 
     def get_transpose_weight_keys(self):
         need_to_transpose = []
